@@ -1,4 +1,8 @@
+//#define DEBUG_INPUT
+//#define DEBUG_WIRELESS
+
 //import order is important to recognise custom structures
+#include <Wire.h>
 #include "wifi.h"
 #include "ads1115_input.h"
 #include "sh1106_display.h"
@@ -10,7 +14,9 @@ long oneSecondUpdates = 0;
 long bindDuration = 5000;
 
 void setup() {
-  Serial.begin(115200);
+  #if defined(DEBUG_INPUT) || defined(DEBUG_WIRELESS)
+    Serial.begin(115200);
+  #endif
   displayInit();
   inputInit();
   wifiPacket = wifiInitBind(wifiPacket);

@@ -3,18 +3,6 @@ extern "C" {
   #include "user_interface.h"
 }
 #define RANDOM_REG32  ESP8266_DREG(0x20E44)
-//#define DEBUG_WIFI
-
-typedef struct {
-  uint8_t type[2];
-  uint8_t duration[2];
-  uint8_t receiver[6];
-  uint8_t transmitter[6];
-  uint8_t bss[6];
-  uint8_t sequence[2];
-  uint8_t timestampt[8];
-  uint8_t data[22];
-} Packet;
 
 uint8_t probe_packet[54] = {
 0x50, 0x88,                         //Type/Subtype: Probe Response
@@ -27,8 +15,18 @@ uint8_t probe_packet[54] = {
 //managment frame fixed and taged params use for data
 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
+typedef struct {
+  uint8_t type[2];
+  uint8_t duration[2];
+  uint8_t receiver[6];
+  uint8_t transmitter[6];
+  uint8_t bss[6];
+  uint8_t sequence[2];
+  uint8_t timestampt[8];
+  uint8_t data[22];
+} Packet;
 
-struct RxControl {
+typedef struct {
   signed rssi: 8;
   unsigned rate: 4;
   unsigned is_group: 1;
@@ -53,27 +51,22 @@ struct RxControl {
   unsigned ampdu_cnt: 8;
   unsigned channel: 4;
   unsigned: 12;
-};
+ } RxControl;
 
-struct frame_buf {
-  struct RxControl rx_ctrl;
-  uint8_t type[2];
-  uint8_t duration[2];
-  uint8_t receiver[6];
-  uint8_t transmitter[6];
-  uint8_t bss[6];
-  uint8_t sequence[2];
-  uint8_t timestampt[8];
-  uint8_t data[22];
+struct Frame {
+  RxControl rx_ctrl;
+  Packet packet;
 };
 
 uint8_t bind_address[6] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06};
-uint8_t bind_channel = 5;
-uint8_t tx_address[6];
-uint8_t rx_address[6];
+uint8_t bind_channel = 3;
+uint8_t tx_address[6] = {0x16, 0xC2, 0xD4, 0xFB, 0xF6, 0x4C};
+uint8_t rx_address[6] = {0x76, 0x3D, 0xDF, 0xF3, 0xAF, 0x29};
 uint8_t channel;
 uint32_t packetCount = 0;
 uint8_t enablePacketCount=1;
+uint8_t binding = 1;
+int8_t rssi = -127;
 
 void promisc_cb(uint8_t *buf, uint16_t len);
 uint8_t findEmptyChannel();
@@ -86,21 +79,23 @@ Packet wifiInitBind(Packet packet){
   wifi_promiscuous_enable(0);
   wifi_set_promiscuous_rx_cb(promisc_cb);
   wifi_promiscuous_enable(1);
-  system_phy_set_max_tpw(40); //lower power for binding
+  system_phy_set_max_tpw(82);
   wifi_set_channel(bind_channel);
-
-  generateAddress(tx_address);
-  generateAddress(rx_address);
-  channel = findEmptyChannel();
+  //TODO write to EEPROM on initial startup instead of hardcoding
+  //generateAddress(rx_address);
+  //TODO think how to handle tx swich off and reneogaotiate chanel on startup
+  //channel = findEmptyChannel();
+  channel = bind_channel;
 
   memcpy( &packet, probe_packet, sizeof(probe_packet));
   memcpy( &packet.transmitter, tx_address, 6);
   memcpy( &packet.receiver, bind_address, 6);
+  generateAddress(packet.bss);
   for (uint8_t i = 0; i < 6; i++ ) {
     packet.data[i] = rx_address[i];
   }
   packet.data[6] = channel;
-  #ifdef DEBUG_WIFI
+  #ifdef DEBUG_WIRELESS
     printPacket(packet);
   #endif
   return packet;
@@ -108,10 +103,9 @@ Packet wifiInitBind(Packet packet){
 
 Packet wifiInitData(Packet packet){
   enablePacketCount = 0;
-  system_phy_set_max_tpw(82);
   wifi_set_channel(channel);
   memcpy( &packet.receiver, rx_address, 6);
-  #ifdef DEBUG_WIFI
+  #ifdef DEBUG_WIRELESS
     printPacket(packet);
   #endif
   return packet;
@@ -122,12 +116,19 @@ void promisc_cb(uint8_t *buf, uint16_t len) {
     packetCount++;
   }
   if (buf[12] == 0x50 && buf[13] == 0x88) { //discard if not Type/Subtype: Probe Response
-    struct frame_buf *frame = (struct frame_buf*) buf;
+    struct Frame *frame = (struct Frame*) buf;
     for (uint8_t i = 0; i < 6; i++ ) { //discard if does not match expected address
-      if ( tx_address [i] != frame->receiver[i] ) {
+      if ( tx_address [i] != frame->packet.receiver[i] ) {
         return;
       }
     }
+    if(binding) {
+      binding = 0; //stop binding as soon as first packet is recieved
+      #ifdef DEBUG_WIRELESS
+        Serial.println("Recieved reply from rx bnding complete");
+      #endif
+    }
+    rssi = frame->packet.data[0];
   }
 }
 
@@ -138,8 +139,8 @@ uint8_t findEmptyChannel(){
     packetCount = 0;
     delay(300);
     packets[i] = packetCount;
-    #ifdef DEBUG_WIFI
-      Serial.print("channel:"); Serial.print(i); Serial.print(" packets:"); Serial.println( packets[i]);
+    #ifdef DEBUG_WIRELESS
+      Serial.print("Channel:"); Serial.print(i); Serial.print(" packets:"); Serial.println( packets[i]);
     #endif
   }
   uint16_t previous = packets[1];
@@ -150,24 +151,24 @@ uint8_t findEmptyChannel(){
         previous = packets[i];
     }
   }
-    #ifdef DEBUG_WIFI
-      Serial.print("selected least busy wifi channel: "); Serial.println(channel);
+    #ifdef DEBUG_WIRELESS
+      Serial.print("Selected least busy wifi channel: "); Serial.println(channel);
     #endif
   return channel;
 
 }
 
 void generateAddress(uint8_t *address){
- #ifdef DEBUG_WIFI
-    Serial.print("generating random address: ");
+ #ifdef DEBUG_WIRELESS
+    Serial.print("Generating random address: ");
   #endif
   for (uint8_t i = 0; i < 6; i++) {
     address[i] = RANDOM_REG32 % 256;
-    #ifdef DEBUG_WIFI
+    #ifdef DEBUG_WIRELESS
       Serial.print(address[i], HEX); Serial.print("_");
     #endif
   }
-  #ifdef DEBUG_WIFI
+  #ifdef DEBUG_WIRELESS
     Serial.println();
   #endif
 }
@@ -181,12 +182,11 @@ float remoteBatteryVoltage(){
     return 0;
 }
 
-//not implemented
 int8_t remoteRssi(){
-    return 0;
+    return rssi;
 }
 
-#ifdef DEBUG_WIFI
+#ifdef DEBUG_WIRELESS
 void printPacket(Packet packet){
     uint8_t i = 0;
     for(i=0; i < 2; i++){
@@ -223,14 +223,3 @@ void printPacket(Packet packet){
     Serial.println();
 }
 #endif
-
-/*uint8_t packet[64] = {
-0x50, 0x88,                         //Type/Subtype: Probe Response
-0x00, 0x00,                         //Duration - will be overridden
-0x01, 0x02, 0x03, 0x04, 0x05, 0x06, //Receiver/Destination address
-0x1a, 0x2a, 0x3a, 0x4a, 0x5a, 0x6a, //Transmitter/Source address
-0x1a, 0x2a, 0x3a, 0x4a, 0x5a, 0x6a, //BSS Id
-0x00, 0x00,                         //Fragment/Sequence
-0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, //Timestamp - will be overridden
-//managment frame fixed and taged params use for data
-0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xa6, 0xf7, 0xf8, 0xfa, 0xfb, 0xfc, 0xfd, 0xff, 0x1f, 0x2f, 0x3f, 0x4f, 0x5f, 0x6f, 0x7f, 0x8f, 0x9f };*/

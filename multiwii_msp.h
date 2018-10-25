@@ -15,7 +15,6 @@
 
 #define MSP_SET_RAW_RC  200   //in message          8 rc chan
 #define TX_BUFFER_SIZE 23
-//#define DEBUG_MSP
 
 uint8_t checksum;
 volatile uint8_t serialHeadTX, serialTailTX = 0;
@@ -59,12 +58,13 @@ void readBuffer(uint8_t *msp_packet) {
   }
 }
 
-void updateMspRawRc(uint8_t *msp, struct TxInput in){
+//channel order to match default betaflight AETR1234
+void updateMspRawRc(uint8_t *msp, TxInput in){
    headSerialResponse(16, MSP_SET_RAW_RC);
-   serialize16(in.lx);
-   serialize16(in.ly);
-   serialize16(in.ry);
    serialize16(in.rx);
+   serialize16(in.ry);
+   serialize16(in.ly);
+   serialize16(in.lx);
    serialize16(in.aux0);
    serialize16(in.aux1);
    serialize16(in.aux2);
